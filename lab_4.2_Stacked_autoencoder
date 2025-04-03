@@ -5,14 +5,14 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.datasets import mnist
 from tensorflow.keras import regularizers
 
-# Load MNIST dataset
+
 (x_train, _), (x_test, _) = mnist.load_data()
 
-# Normalize the dataset
+
 x_train = x_train.astype('float32') / 255.
 x_test = x_test.astype('float32') / 255.
 
-# Flatten the images
+
 x_train = x_train.reshape((x_train.shape[0], -1))
 x_test = x_test.reshape((x_test.shape[0], -1))
 
