@@ -1,0 +1,168 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torchvision
+import torchvision.transforms as transforms
+from torch.autograd import Variable
+from torch.utils.data import DataLoader, TensorDataset
+import numpy as np
+
+
+class RBM(nn.Module):
+    def __init__(self, visible_units, hidden_units):
+        super(RBM, self).__init__()
+        self.visible_units = visible_units
+        self.hidden_units = hidden_units
+
+        self.W = nn.Parameter(torch.randn(visible_units, hidden_units) * 0.1)
+        self.bv = nn.Parameter(torch.zeros(visible_units))
+        self.bh = nn.Parameter(torch.zeros(hidden_units))
+    
+    def sample_h(self, v):
+        h_prob = torch.sigmoid(torch.matmul(v, self.W) + self.bh)
+        return h_prob
+    
+    def sample_v(self, h):
+        v_prob = torch.sigmoid(torch.matmul(h, self.W.t()) + self.bv)
+        return v_prob
+    
+    def contrastive_divergence(self, v0, k=1):
+        v = v0
+        for _ in range(k):
+            h0 = self.sample_h(v)  # Initial hidden layer activations
+            v = self.sample_v(h0)  # Reconstructed visible layer
+        h1 = self.sample_h(v)  # Hidden layer after reconstruction
+        
+  
+        positive_grad = torch.matmul(v0.t(), h0)
+        negative_grad = torch.matmul(v.t(), h1)
+        
+        dW = positive_grad - negative_grad
+        dbv = torch.sum(v0 - v, 0)
+        dbh = torch.sum(h0 - h1, 0)
+        
+        return dW, dbv, dbh
+
+    def train_rbm(self, data, learning_rate=0.01, batch_size=10, epochs=10, k=1):
+        optimizer = optim.SGD(self.parameters(), lr=learning_rate)
+        
+        for epoch in range(epochs):
+            for i in range(0, len(data), batch_size):
+                batch_data = data[i:i+batch_size]
+                v0 = Variable(torch.FloatTensor(batch_data))
+                
+                dW, dbv, dbh = self.contrastive_divergence(v0, k)
+                
+                optimizer.zero_grad()
+                self.W.grad = dW
+                self.bv.grad = dbv
+                self.bh.grad = dbh
+                optimizer.step()
+            print(f"Epoch {epoch+1}/{epochs} completed")
+        
+    def forward(self, v):
+        return self.sample_h(v)
+
+
+class DBN(nn.Module):
+    def __init__(self, layer_sizes, n_classes):
+        super(DBN, self).__init__()
+        self.layers = nn.ModuleList()
+        for i in range(len(layer_sizes) - 1):
+            self.layers.append(RBM(layer_sizes[i], layer_sizes[i+1]))
+        
+     
+        self.fc = nn.Linear(layer_sizes[-1], n_classes)
+
+    def pretrain(self, data, learning_rate=0.01, batch_size=10, epochs=10, k=1):
+        for layer in self.layers:
+            layer.train_rbm(data, learning_rate, batch_size, epochs, k)
+    
+            data = layer.sample_h(torch.FloatTensor(data)).detach().numpy()
+
+    def forward(self, x):
+
+        for layer in self.layers:
+            x = layer.sample_h(x)
+       
+        return self.fc(x)
+
+
+transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
+
+trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+
+train_loader = DataLoader(trainset, batch_size=64, shuffle=True)
+test_loader = DataLoader(testset, batch_size=1000, shuffle=False)
+
+
+def prepare_data(loader):
+    data = []
+    labels = []
+    for images, targets in loader:
+        data.append(images.view(images.size(0), -1).numpy())
+        labels.append(targets.numpy())
+    return np.concatenate(data), np.concatenate(labels)
+
+train_data, train_labels = prepare_data(train_loader)
+test_data, test_labels = prepare_data(test_loader)
+
+
+dbn = DBN([784, 512, 256, 128], 10)  # 784 -> 512 -> 256 -> 128 -> 10 (for MNIST)
+
+
+dbn.pretrain(train_data, learning_rate=0.01, batch_size=10, epochs=5, k=1)
+
+# Fine-tune the DBN using supervised learning
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(dbn.parameters(), lr=0.1)
+
+num_epochs = 10
+for epoch in range(num_epochs):
+    dbn.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    for images, labels in train_loader:
+        images = images.view(images.size(0), -1)
+        labels = Variable(labels)
+        
+       
+        outputs = dbn(images)
+        
+       
+        loss = criterion(outputs, labels)
+        
+       
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        running_loss += loss.item()
+        
+      
+        _, predicted = torch.max(outputs, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+    
+    print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader):.4f}, Accuracy: {100 * correct / total:.2f}%")
+
+
+dbn.eval()
+correct = 0
+total = 0
+with torch.no_grad():
+    for images, labels in test_loader:
+        images = images.view(images.size(0), -1)
+        labels = Variable(labels)
+        
+    
+        outputs = dbn(images)
+        
+        
+        _, predicted = torch.max(outputs, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+
+print(f"Test Accuracy: {100 * correct / total:.2f}%")
