@@ -1,1 +1,105 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+from torch.autograd import Variable
+
+# Define the RBM class
+class RBM(nn.Module):
+    def __init__(self, visible_units, hidden_units):
+        super(RBM, self).__init__()
+        self.visible_units = visible_units
+        self.hidden_units = hidden_units
+        
+        # Weight matrix, biases for visible and hidden units
+        self.W = nn.Parameter(torch.randn(visible_units, hidden_units) * 0.1)
+        self.bv = nn.Parameter(torch.zeros(visible_units))
+        self.bh = nn.Parameter(torch.zeros(hidden_units))
+    
+    def sample_h(self, v):
+        # Hidden layer activation
+        h_prob = torch.sigmoid(torch.matmul(v, self.W) + self.bh)
+        return h_prob
+    
+    def sample_v(self, h):
+        # Visible layer activation
+        v_prob = torch.sigmoid(torch.matmul(h, self.W.t()) + self.bv)
+        return v_prob
+    
+    def contrastive_divergence(self, v0, k=1):
+        v = v0
+        for _ in range(k):
+            h0 = self.sample_h(v)  # Initial hidden layer activations
+            v = self.sample_v(h0)  # Reconstructed visible layer
+        h1 = self.sample_h(v)  # Hidden layer after reconstruction
+        
+        # Compute gradient for weights and biases
+        positive_grad = torch.matmul(v0.t(), h0)
+        negative_grad = torch.matmul(v.t(), h1)
+        
+        # Compute the gradients
+        dW = positive_grad - negative_grad
+        dbv = torch.sum(v0 - v, 0)
+        dbh = torch.sum(h0 - h1, 0)
+        
+        return dW, dbv, dbh
+
+    def train_rbm(self, data, learning_rate=0.01, batch_size=10, epochs=10, k=1):
+        optimizer = optim.SGD(self.parameters(), lr=learning_rate)
+        
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            for i in range(0, len(data), batch_size):
+                batch_data = data[i:i+batch_size]
+                v0 = Variable(torch.FloatTensor(batch_data))
+                
+                # Perform contrastive divergence to update parameters
+                dW, dbv, dbh = self.contrastive_divergence(v0, k)
+                
+                # Update weights and biases
+                optimizer.zero_grad()
+                self.W.grad = dW
+                self.bv.grad = dbv
+                self.bh.grad = dbh
+                optimizer.step()
+            
+            print(f"Epoch {epoch+1}/{epochs} completed")
+        
+    def forward(self, v):
+        return self.sample_h(v)
+
+# Define the Stacked RBM class
+class StackedRBM(nn.Module):
+    def __init__(self, layer_sizes):
+        super(StackedRBM, self).__init__()
+        self.layers = nn.ModuleList()
+        for i in range(len(layer_sizes) - 1):
+            self.layers.append(RBM(layer_sizes[i], layer_sizes[i+1]))
+
+    def pretrain(self, data, learning_rate=0.01, batch_size=10, epochs=10, k=1):
+        for layer in self.layers:
+            layer.train_rbm(data, learning_rate, batch_size, epochs, k)
+            # Update data to the hidden layer activations for the next RBM layer
+            data = layer.sample_h(torch.FloatTensor(data)).detach().numpy()
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer.sample_h(x)
+        return x
+
+# Generate a sample dataset (binary data)
+# Here we use a simple random binary dataset
+data = np.random.randint(0, 2, (100, 6))
+
+# Instantiate the stacked RBM with 3 layers
+stacked_rbm = StackedRBM([6, 4, 3, 2])  # Input layer of 6 units, 2 hidden layers of 4, 3 units, and output of 2 units
+
+# Pretrain the stacked RBM
+stacked_rbm.pretrain(data, learning_rate=0.01, batch_size=10, epochs=5, k=1)
+
+# After pretraining, you can use the stacked RBM for further fine-tuning or testing
+test_input = torch.FloatTensor(data[0]).unsqueeze(0)  # Sample input
+output = stacked_rbm(test_input)
+print("Output of the stacked RBM after pretraining:")
+print(output)
 
