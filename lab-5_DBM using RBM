@@ -4,25 +4,25 @@ import torch.optim as optim
 import numpy as np
 from torch.autograd import Variable
 
-# Define the RBM class
+
 class RBM(nn.Module):
     def __init__(self, visible_units, hidden_units):
         super(RBM, self).__init__()
         self.visible_units = visible_units
         self.hidden_units = hidden_units
         
-        # Weight matrix, biases for visible and hidden units
+       
         self.W = nn.Parameter(torch.randn(visible_units, hidden_units) * 0.1)
         self.bv = nn.Parameter(torch.zeros(visible_units))
         self.bh = nn.Parameter(torch.zeros(hidden_units))
     
     def sample_h(self, v):
-        # Hidden layer activation
+ 
         h_prob = torch.sigmoid(torch.matmul(v, self.W) + self.bh)
         return h_prob
     
     def sample_v(self, h):
-        # Visible layer activation
+     
         v_prob = torch.sigmoid(torch.matmul(h, self.W.t()) + self.bv)
         return v_prob
     
@@ -33,11 +33,11 @@ class RBM(nn.Module):
             v = self.sample_v(h0)  # Reconstructed visible layer
         h1 = self.sample_h(v)  # Hidden layer after reconstruction
         
-        # Compute gradient for weights and biases
+   
         positive_grad = torch.matmul(v0.t(), h0)
         negative_grad = torch.matmul(v.t(), h1)
         
-        # Compute the gradients
+
         dW = positive_grad - negative_grad
         dbv = torch.sum(v0 - v, 0)
         dbh = torch.sum(h0 - h1, 0)
@@ -53,10 +53,10 @@ class RBM(nn.Module):
                 batch_data = data[i:i+batch_size]
                 v0 = Variable(torch.FloatTensor(batch_data))
                 
-                # Perform contrastive divergence to update parameters
+     
                 dW, dbv, dbh = self.contrastive_divergence(v0, k)
                 
-                # Update weights and biases
+       
                 optimizer.zero_grad()
                 self.W.grad = dW
                 self.bv.grad = dbv
@@ -68,13 +68,15 @@ class RBM(nn.Module):
     def forward(self, v):
         return self.sample_h(v)
 
-# Define the Stacked RBM class
+
 class StackedRBM(nn.Module):
-    def __init__(self, layer_sizes):
+    def __init__(self, layer_sizes, n_classes):
         super(StackedRBM, self).__init__()
         self.layers = nn.ModuleList()
         for i in range(len(layer_sizes) - 1):
             self.layers.append(RBM(layer_sizes[i], layer_sizes[i+1]))
+        
+        self.fc = nn.Linear(layer_sizes[-1], n_classes)
 
     def pretrain(self, data, learning_rate=0.01, batch_size=10, epochs=10, k=1):
         for layer in self.layers:
@@ -83,23 +85,106 @@ class StackedRBM(nn.Module):
             data = layer.sample_h(torch.FloatTensor(data)).detach().numpy()
 
     def forward(self, x):
+
         for layer in self.layers:
             x = layer.sample_h(x)
-        return x
 
-# Generate a sample dataset (binary data)
-# Here we use a simple random binary dataset
-data = np.random.randint(0, 2, (100, 6))
+        return self.fc(x)
 
-# Instantiate the stacked RBM with 3 layers
-stacked_rbm = StackedRBM([6, 4, 3, 2])  # Input layer of 6 units, 2 hidden layers of 4, 3 units, and output of 2 units
+class DNN(nn.Module):
+    def __init__(self, input_size, hidden_sizes, output_size):
+        super(DNN, self).__init__()
+        layers = []
+        in_features = input_size
+        for h_size in hidden_sizes:
+            layers.append(nn.Linear(in_features, h_size))
+            layers.append(nn.ReLU())
+            in_features = h_size
+        layers.append(nn.Linear(in_features, output_size))
+        self.model = nn.Sequential(*layers)
+    
+    def forward(self, x):
+        return self.model(x)
 
-# Pretrain the stacked RBM
-stacked_rbm.pretrain(data, learning_rate=0.01, batch_size=10, epochs=5, k=1)
 
-# After pretraining, you can use the stacked RBM for further fine-tuning or testing
-test_input = torch.FloatTensor(data[0]).unsqueeze(0)  # Sample input
-output = stacked_rbm(test_input)
-print("Output of the stacked RBM after pretraining:")
-print(output)
+num_samples = 100
+num_features = 6  # 6 input features
+num_classes = 2    # 2 classes for classification
 
+
+data = np.random.randint(0, 2, (num_samples, num_features))
+labels = np.random.randint(0, 2, (num_samples, num_classes))  # Binary labels
+
+
+train_data = data[:80]
+train_labels = labels[:80]
+test_data = data[80:]
+test_labels = labels[80:]
+
+
+train_data_tensor = torch.FloatTensor(train_data)
+train_labels_tensor = torch.FloatTensor(train_labels)
+test_data_tensor = torch.FloatTensor(test_data)
+test_labels_tensor = torch.FloatTensor(test_labels)
+
+
+stacked_rbm = StackedRBM([6, 4, 3, 2], num_classes=num_classes)
+stacked_rbm.pretrain(train_data, learning_rate=0.01, batch_size=10, epochs=5, k=1)
+
+
+criterion = nn.BCEWithLogitsLoss()
+optimizer = optim.SGD(stacked_rbm.parameters(), lr=0.01)
+
+num_epochs = 50
+for epoch in range(num_epochs):
+    optimizer.zero_grad()
+    
+
+    outputs = stacked_rbm(train_data_tensor)
+    
+
+    loss = criterion(outputs, train_labels_tensor)
+    
+
+    loss.backward()
+    optimizer.step()
+
+    print(f"Stacked RBM - Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
+
+dnn = DNN(input_size=num_features, hidden_sizes=[4, 3], output_size=num_classes)
+
+
+optimizer_dnn = optim.SGD(dnn.parameters(), lr=0.01)
+for epoch in range(num_epochs):
+    optimizer_dnn.zero_grad()
+
+    outputs_dnn = dnn(train_data_tensor)
+    
+   
+    loss_dnn = criterion(outputs_dnn, train_labels_tensor)
+    
+
+    loss_dnn.backward()
+    optimizer_dnn.step()
+
+    print(f"DNN - Epoch [{epoch+1}/{num_epochs}], Loss: {loss_dnn.item():.4f}")
+
+
+stacked_rbm.eval()
+dnn.eval()
+
+with torch.no_grad():
+    
+    outputs_rbm = stacked_rbm(test_data_tensor)
+    preds_rbm = torch.round(torch.sigmoid(outputs_rbm))
+
+
+    outputs_dnn = dnn(test_data_tensor)
+    preds_dnn = torch.round(torch.sigmoid(outputs_dnn))
+
+
+accuracy_rbm = (preds_rbm == test_labels_tensor).float().mean()
+accuracy_dnn = (preds_dnn == test_labels_tensor).float().mean()
+
+print(f"Test Accuracy (Stacked RBM): {accuracy_rbm.item() * 100:.2f}%")
+print(f"Test Accuracy (Traditional DNN): {accuracy_dnn.item() * 100:.2f}%")
