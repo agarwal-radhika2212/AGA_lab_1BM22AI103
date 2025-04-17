@@ -1,190 +1,87 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
+
 import numpy as np
-from torch.autograd import Variable
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.neural_network import BernoulliRBM
+from keras.models import Sequential
+from keras.layers import Dense
+from sklearn.metrics import accuracy_score
+from sklearn.neural_network import MLPClassifier
+
+url = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
+column_names = ['age', 'workclass', 'fnlwgt', 'education', 'education_num', 'marital_status', 
+                'occupation', 'relationship', 'race', 'sex', 'capital_gain', 'capital_loss', 
+                'hours_per_week', 'native_country', 'income']
 
 
-class RBM(nn.Module):
-    def __init__(self, visible_units, hidden_units):
-        super(RBM, self).__init__()
-        self.visible_units = visible_units
-        self.hidden_units = hidden_units
-        
-       
-        self.W = nn.Parameter(torch.randn(visible_units, hidden_units) * 0.1)
-        self.bv = nn.Parameter(torch.zeros(visible_units))
-        self.bh = nn.Parameter(torch.zeros(hidden_units))
-    
-    def sample_h(self, v):
- 
-        h_prob = torch.sigmoid(torch.matmul(v, self.W) + self.bh)
-        return h_prob
-    
-    def sample_v(self, h):
-     
-        v_prob = torch.sigmoid(torch.matmul(h, self.W.t()) + self.bv)
-        return v_prob
-    
-    def contrastive_divergence(self, v0, k=1):
-        v = v0
-        for _ in range(k):
-            h0 = self.sample_h(v)  # Initial hidden layer activations
-            v = self.sample_v(h0)  # Reconstructed visible layer
-        h1 = self.sample_h(v)  # Hidden layer after reconstruction
-        
-   
-        positive_grad = torch.matmul(v0.t(), h0)
-        negative_grad = torch.matmul(v.t(), h1)
-        
-
-        dW = positive_grad - negative_grad
-        dbv = torch.sum(v0 - v, 0)
-        dbh = torch.sum(h0 - h1, 0)
-        
-        return dW, dbv, dbh
-
-    def train_rbm(self, data, learning_rate=0.01, batch_size=10, epochs=10, k=1):
-        optimizer = optim.SGD(self.parameters(), lr=learning_rate)
-        
-        for epoch in range(epochs):
-            epoch_loss = 0.0
-            for i in range(0, len(data), batch_size):
-                batch_data = data[i:i+batch_size]
-                v0 = Variable(torch.FloatTensor(batch_data))
-                
-     
-                dW, dbv, dbh = self.contrastive_divergence(v0, k)
-                
-       
-                optimizer.zero_grad()
-                self.W.grad = dW
-                self.bv.grad = dbv
-                self.bh.grad = dbh
-                optimizer.step()
-            
-            print(f"Epoch {epoch+1}/{epochs} completed")
-        
-    def forward(self, v):
-        return self.sample_h(v)
+data = pd.read_csv(url, names=column_names, na_values=" ?", sep=',\s+', engine='python')
 
 
-class StackedRBM(nn.Module):
-    def __init__(self, layer_sizes, n_classes):
-        super(StackedRBM, self).__init__()
-        self.layers = nn.ModuleList()
-        for i in range(len(layer_sizes) - 1):
-            self.layers.append(RBM(layer_sizes[i], layer_sizes[i+1]))
-        
-        self.fc = nn.Linear(layer_sizes[-1], n_classes)
-
-    def pretrain(self, data, learning_rate=0.01, batch_size=10, epochs=10, k=1):
-        for layer in self.layers:
-            layer.train_rbm(data, learning_rate, batch_size, epochs, k)
-            # Update data to the hidden layer activations for the next RBM layer
-            data = layer.sample_h(torch.FloatTensor(data)).detach().numpy()
-
-    def forward(self, x):
-
-        for layer in self.layers:
-            x = layer.sample_h(x)
-
-        return self.fc(x)
-
-class DNN(nn.Module):
-    def __init__(self, input_size, hidden_sizes, output_size):
-        super(DNN, self).__init__()
-        layers = []
-        in_features = input_size
-        for h_size in hidden_sizes:
-            layers.append(nn.Linear(in_features, h_size))
-            layers.append(nn.ReLU())
-            in_features = h_size
-        layers.append(nn.Linear(in_features, output_size))
-        self.model = nn.Sequential(*layers)
-    
-    def forward(self, x):
-        return self.model(x)
+data.dropna(inplace=True)
 
 
-num_samples = 100
-num_features = 6  # 6 input features
-num_classes = 2    # 2 classes for classification
+categorical_columns = ['workclass', 'education', 'marital_status', 'occupation', 'relationship', 'race', 'sex', 'native_country', 'income']
+label_encoders = {}
+
+for col in categorical_columns:
+    le = LabelEncoder()
+    data[col] = le.fit_transform(data[col])
+    label_encoders[col] = le
+
+X = data.drop('income', axis=1).values
+y = data['income'].values
 
 
-data = np.random.randint(0, 2, (num_samples, num_features))
-labels = np.random.randint(0, 2, (num_samples, num_classes))  # Binary labels
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.3, random_state=42)
 
 
-train_data = data[:80]
-train_labels = labels[:80]
-test_data = data[80:]
-test_labels = labels[80:]
+n_hidden_1 = 128  
+n_hidden_2 = 64   
 
 
-train_data_tensor = torch.FloatTensor(train_data)
-train_labels_tensor = torch.FloatTensor(train_labels)
-test_data_tensor = torch.FloatTensor(test_data)
-test_labels_tensor = torch.FloatTensor(test_labels)
+rbm1 = BernoulliRBM(n_components=n_hidden_1, learning_rate=0.1, n_iter=10, random_state=42)
+X_train_rbm1 = rbm1.fit_transform(X_train)
+
+rbm2 = BernoulliRBM(n_components=n_hidden_2, learning_rate=0.1, n_iter=10, random_state=42)
+X_train_rbm2 = rbm2.fit_transform(X_train_rbm1)
 
 
-stacked_rbm = StackedRBM([6, 4, 3, 2], num_classes=num_classes)
-stacked_rbm.pretrain(train_data, learning_rate=0.01, batch_size=10, epochs=5, k=1)
+model_dbn = Sequential()
+model_dbn.add(Dense(64, input_dim=n_hidden_2, activation='relu'))  
+model_dbn.add(Dense(32, activation='relu'))  
+model_dbn.add(Dense(1, activation='sigmoid')) 
+
+model_dbn.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+model_dbn.fit(X_train_rbm2, y_train, epochs=10, batch_size=128)
+
+X_test_rbm1 = rbm1.transform(X_test)
+X_test_rbm2 = rbm2.transform(X_test_rbm1)
+
+test_loss, test_acc = model_dbn.evaluate(X_test_rbm2, y_test)
+print(f"Test accuracy for DBN: {test_acc * 100:.2f}%")
+
+mlp = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=10, solver='adam', random_state=42)
+mlp.fit(X_train, y_train)
 
 
-criterion = nn.BCEWithLogitsLoss()
-optimizer = optim.SGD(stacked_rbm.parameters(), lr=0.01)
-
-num_epochs = 50
-for epoch in range(num_epochs):
-    optimizer.zero_grad()
-    
-
-    outputs = stacked_rbm(train_data_tensor)
-    
-
-    loss = criterion(outputs, train_labels_tensor)
-    
-
-    loss.backward()
-    optimizer.step()
-
-    print(f"Stacked RBM - Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
-
-dnn = DNN(input_size=num_features, hidden_sizes=[4, 3], output_size=num_classes)
+y_pred = mlp.predict(X_test)
+traditional_acc = accuracy_score(y_test, y_pred)
+print(f"Test accuracy for traditional DNN: {traditional_acc * 100:.2f}%")
 
 
-optimizer_dnn = optim.SGD(dnn.parameters(), lr=0.01)
-for epoch in range(num_epochs):
-    optimizer_dnn.zero_grad()
-
-    outputs_dnn = dnn(train_data_tensor)
-    
-   
-    loss_dnn = criterion(outputs_dnn, train_labels_tensor)
-    
-
-    loss_dnn.backward()
-    optimizer_dnn.step()
-
-    print(f"DNN - Epoch [{epoch+1}/{num_epochs}], Loss: {loss_dnn.item():.4f}")
+plt.figure(figsize=(10, 5))
+for i in range(10):  
+    plt.subplot(2, 5, i + 1)
+    plt.imshow(rbm1.components_[i].reshape(2, 7), cmap='gray')  
+    plt.axis('off')
+plt.suptitle("RBM1 Learned Features (reshaped 2x7)")
+plt.tight_layout()
+plt.show()
 
 
-stacked_rbm.eval()
-dnn.eval()
-
-with torch.no_grad():
-    
-    outputs_rbm = stacked_rbm(test_data_tensor)
-    preds_rbm = torch.round(torch.sigmoid(outputs_rbm))
-
-
-    outputs_dnn = dnn(test_data_tensor)
-    preds_dnn = torch.round(torch.sigmoid(outputs_dnn))
-
-
-accuracy_rbm = (preds_rbm == test_labels_tensor).float().mean()
-accuracy_dnn = (preds_dnn == test_labels_tensor).float().mean()
-
-print(f"Test Accuracy (Stacked RBM): {accuracy_rbm.item() * 100:.2f}%")
-print(f"Test Accuracy (Traditional DNN): {accuracy_dnn.item() * 100:.2f}%")
